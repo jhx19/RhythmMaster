@@ -2,8 +2,6 @@
 import board
 
 # --- Pin Definitions ---
-PIN_ENCODER_A = board.D0
-PIN_ENCODER_B = board.D1
 PIN_TOUCH_1 = board.D0
 PIN_TOUCH_2 = board.D1
 PIN_TOUCH_3 = board.D2
@@ -14,6 +12,7 @@ PIN_I2C_SDA = board.D6
 PIN_I2C_SCL = board.D7
 PIN_ENCODER_A = board.D8
 PIN_ENCODER_B = board.D9
+PIN_ENCODER_BUTTON = board.D10
 # --- Game Constants ---
 DIFFICULTY_EASY = 0
 DIFFICULTY_MED = 1
@@ -27,13 +26,13 @@ TIME_LIMITS = {
 }
 
 # --- Hardware Constants ---
-NUM_PIXELS = 28  # Based on neo_test.py
+NUM_PIXELS = 28  
 SCREEN_WIDTH = 128
 SCREEN_HEIGHT = 64
-ADXL_THRESHOLD = 8 # Based on input_test.py
+ADXL_THRESHOLD = 8 # Accelerometer movement threshold
 
 # --- Move Definitions ---
-MOVE_NONE = 0
+MOVE_NONE = 0 
 MOVE_TOUCH_1 = 1
 MOVE_TOUCH_2 = 2
 MOVE_TOUCH_3 = 3
