@@ -95,7 +95,11 @@ class RhythmGame:
         self.active_index = 0
         self.score = 0
         self.combo = 0
-        self.hw.display_text(f"Ready?", scale=2)
+        self.max_combo = 0
+        self.hw.set_leds((0, 0, 0))
+        
+        # 调用新的 HUD 绘制函数
+        self._draw_hud(top_message="GET READY!")
         print("Game Started using Time Slicing Logic")
 
     def update(self):
@@ -143,48 +147,83 @@ class RhythmGame:
         self._update_feedback(song_time)
 
 
-        # 4. 输入处理 (Input Handling) - 极简逻辑
+        # 4. 输入处理
         user_input = self.hw.read_game_inputs()
         
-        # 只有在有输入，且当前音符需要操作时才判定
-        if user_input != settings.MOVE_NONE and len(active_node["required_moves"]) > 0:
+        # 获取当前正在判定区间的音符
+        if self.active_index < len(self.timeline):
+            active_node = self.timeline[self.active_index]
             
-            # 检查用户输入是否在当前音符的需求列表中
-            if user_input in active_node["required_moves"]:
-                # --- 命中逻辑 (HIT) ---
-                
-                # A. 从需求集合中移除该操作 (支持组合键，按对一个消一个)
-                active_node["required_moves"].remove(user_input)
-                
-                # B. 判定 Perfect 还是 Good
-                # 计算绝对误差
-                diff = abs(song_time - active_node["target_time"])
-                is_perfect = diff <= self.perfect_window
-                
-                points = 20 if is_perfect else 10
-                hit_type = "PERFECT" if is_perfect else "GOOD"
-                
-                # C. 如果所有需求都完成了 (集合空了)，才算彻底完成
-                if len(active_node["required_moves"]) == 0:
-                    self.score += points
-                    self.combo += 1
-                    self.max_combo = max(self.max_combo, self.combo)
-                    active_node["hit_status"] = "HIT"
+            if user_input != settings.MOVE_NONE and len(active_node["required_moves"]) > 0:
+                if user_input in active_node["required_moves"]:
+                    # --- 命中逻辑 ---
+                    active_node["required_moves"].remove(user_input)
                     
-                    # 视觉反馈
-                    print(f"{hit_type}! Score: {self.score}")
-                    self.hw.display_text(f"{hit_type}\n{self.combo}", scale=2)
-                    self._flash_row(user_input)
+                    # 判定 Perfect/Good
+                    diff = abs(song_time - active_node["target_time"])
+                    is_perfect = diff <= self.perfect_window
+                    
+                    points = 20 if is_perfect else 10
+                    hit_type = "PERFECT" if is_perfect else "GOOD"
+                    
+                    if len(active_node["required_moves"]) == 0:
+                        self.score += points
+                        self.combo += 1
+                        self.max_combo = max(self.max_combo, self.combo)
+                        # 连击奖励，每增加一次连击，额外加5分
+                        if self.combo > 2:
+                            self.score += 5
+
+                        active_node["hit_status"] = "HIT"
+                        
+                        # --- 更新 HUD: 显示 PERFECT/GOOD ---
+                        self._draw_hud(hit_type)
+                        
+                        self._flash_row(user_input)
                 else:
-                    # 还有剩下的操作没做 (例如双按只按了一个)，暂不加分，等待另一个
-                    print("Combo Hit Part 1...")
+                    # 错误输入忽略，不刷新屏幕
+                    pass
+
+    def _draw_hud(self, feedback_text=""):
+        """
+        根据用户要求绘制游戏界面 (HUD):
+        - Top: Score (Scale 1)
+        - Mid: PERFECT/GOOD/MISS (Scale 2)
+        - Bot: Combo (Scale 1, only if > 2)
+        """
+        layers = []
+        
+        # 1. Top: Score (屏幕上方 y=5)
+        # 显示格式 "Score: 120"
+        layers.append({
+            'text': f"Score: {self.score}", 
+            'scale': 1, 
+            'y': 5,
+            'x': 5 # 左对齐
+        })
+        
+        # 2. Middle: Feedback (屏幕正中 y=32)
+        # 显示格式 "PERFECT" / "MISS"
+        if feedback_text:
+            layers.append({
+                'text': feedback_text, 
+                'scale': 2, 
+                'y': 32 
+                # x 默认居中 (在 hardware.py 中处理)
+            })
             
-            else:
-                # --- 错误输入 (Wrong Move) ---
-                # 按你的要求：直接忽略 (Pass)
-                # 不扣分，不断连，不结束游戏
-                # print(f"Ignored input: {user_input}")
-                pass
+        # 3. Bottom: Combo (屏幕下方 y=58)
+        # 只有连击数 > 2 时才显示
+        if self.combo > 2:
+            layers.append({
+                'text': f"Combo: {self.combo}", 
+                'scale': 1, 
+                'y': 58 
+                # x 默认居中
+            })
+
+        # 提交给硬件层绘制
+        self.hw.display_layers(layers)
 
     def _update_feedback(self, song_time):
         """负责音频播放和灯光绘制"""
