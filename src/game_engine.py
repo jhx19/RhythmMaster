@@ -2,7 +2,7 @@ import time
 import settings
 
 class RhythmGame:
-    def __init__(self, hardware, song_data):
+    def __init__(self, hardware, song_data, difficulty=settings.DIFFICULTY_EASY):
         self.hw = hardware
         self.song_data = song_data
         
@@ -15,8 +15,14 @@ class RhythmGame:
         
         # 视觉参数: 决定灯珠流动的速度
         # 难度越高，Tick 越短，流动越快
-        self.tick_duration = 0.1 
+        self.tick_duration = settings.DURATION[difficulty]
         self.look_ahead_time = 7 * self.tick_duration 
+
+        # BPM 系数，用于调整音符速度
+        self.bpm_scale = settings.BPM[difficulty]
+
+        # 分数倍率，根据难度调整
+        self.score_factor = settings.SCORE_FACTOR[difficulty]   
         
         # Perfect 判定区: 在时间中点的前后多少秒内算 Perfect
         # 默认为 0.15秒，可根据难度调整
@@ -30,6 +36,14 @@ class RhythmGame:
         self.start_time = 0.0
         self.active_index = 0 # 当前时间指针指向的音符索引
 
+        # 柔和的颜色定义 (R, G, B)
+        self.COLOR_NICE_GREEN = settings.COLOR_NICE_GREEN    # 更饱和的绿色 (Touch)
+        self.COLOR_NICE_RED   = settings.COLOR_NICE_RED      # 柔和红 (Double Tap)
+    
+    # 蓝色渐变阶梯 (从深到浅)
+    # 用于 Left/Right Tilt 的四条轨道分配
+        self.GRADIENT_BLUE = settings.GRADIENT_BLUE
+
     def _preprocess_song_windows(self):
         """
         基于【时间切片法】预处理窗口。
@@ -37,7 +51,6 @@ class RhythmGame:
         Start = (Prev_Time + Curr_Time) / 2
         End   = (Curr_Time + Next_Time) / 2
         """
-        bpm_scale = self.song_data.get("bpm_scale", 1.0)
         raw_steps = self.song_data["steps"]
         total_steps = len(raw_steps)
         
@@ -46,7 +59,7 @@ class RhythmGame:
         # 第一遍：生成绝对时间点
         temp_timeline = []
         for note_name, duration, move_input in raw_steps:
-            real_duration = duration * bpm_scale
+            real_duration = duration * self.bpm_scale
             
             # 处理多按键逻辑: 如果 move_input 是列表就转集合，是单个就转单元素集合
             # 例如: move_input = [TOUCH1, TOUCH2] -> {1, 2}
@@ -99,7 +112,7 @@ class RhythmGame:
         self.hw.set_leds((0, 0, 0))
         
         # 调用新的 HUD 绘制函数
-        self._draw_hud(top_message="GET READY!")
+        self.hw.display_text("GET READY", scale=2, y_offset=25)
         print("Game Started using Time Slicing Logic")
 
     def update(self):
@@ -163,7 +176,7 @@ class RhythmGame:
                     diff = abs(song_time - active_node["target_time"])
                     is_perfect = diff <= self.perfect_window
                     
-                    points = 20 if is_perfect else 10
+                    points = 20 * self.score_factor if is_perfect else 10 * self.score_factor
                     hit_type = "PERFECT" if is_perfect else "GOOD"
                     
                     if len(active_node["required_moves"]) == 0:
@@ -172,7 +185,7 @@ class RhythmGame:
                         self.max_combo = max(self.max_combo, self.combo)
                         # 连击奖励，每增加一次连击，额外加5分
                         if self.combo > 2:
-                            self.score += 5
+                            self.score += 5 * self.score_factor
 
                         active_node["hit_status"] = "HIT"
                         
@@ -271,28 +284,66 @@ class RhythmGame:
         pass
 
     def _draw_note_smart(self, move_id, local_pos):
-        # 复制之前正确的蛇形走线绘制逻辑
-        target_pixel = -1
-        color = (50, 50, 50) 
+        """
+        根据 move_id 和 local_pos (0-6) 绘制灯光。
+        支持特殊动作全轨道显示和渐变色。
+        """
+        
+        # 1. 定义一个内部帮助函数：计算某条轨道在当前 visual_pos 的物理索引
+        # 这是你之前的正确逻辑
+        def get_physical_index(track_idx, vis_pos):
+            if track_idx == 0: return 0 + vis_pos
+            if track_idx == 1: return 13 - vis_pos
+            if track_idx == 2: return 14 + vis_pos
+            if track_idx == 3: return 27 - vis_pos
+            return -1
 
-        if move_id == settings.MOVE_TOUCH_1:
-            target_pixel = 0 + local_pos
-            color = (255, 0, 0)
-        elif move_id == settings.MOVE_TOUCH_2:
-            target_pixel = 13 - local_pos
-            color = (0, 255, 0)
-        elif move_id == settings.MOVE_TOUCH_3:
-            target_pixel = 14 + local_pos
-            color = (0, 0, 255)
-        elif move_id == settings.MOVE_TOUCH_4:
-            target_pixel = 27 - local_pos
-            color = (255, 255, 0)
-        elif move_id == settings.MOVE_TAP:
-            target_pixel = 0 + local_pos
-            color = (255, 0, 255)
-        elif move_id == settings.MOVE_LEFT:
-             target_pixel = 27 - local_pos
-             color = (0, 255, 255)
+        # 2. 初始化要点亮的像素列表： [(pixel_index, color), ...]
+        pixels_to_light = []
 
-        if 0 <= target_pixel < settings.NUM_PIXELS:
-            self.hw.pixels[target_pixel] = color
+        # --- 情况 A: 特殊动作 (全轨道显示) ---
+        if move_id in [settings.MOVE_TAP, settings.MOVE_LEFT, settings.MOVE_RIGHT]:
+            
+            # 遍历所有 4 条轨道
+            for t_idx in range(4):
+                phys_idx = get_physical_index(t_idx, local_pos)
+                if phys_idx < 0: continue
+                
+                # 确定颜色
+                if move_id == settings.MOVE_TAP:
+                    # Double Tap: 全红
+                    c = self.COLOR_NICE_RED
+                
+                elif move_id == settings.MOVE_LEFT:
+                    # Left: 从左到右 -> 深蓝到浅蓝
+                    # T0(深) -> T1 -> T2 -> T3(浅)
+                    c = self.GRADIENT_BLUE[t_idx]
+                    
+                elif move_id == settings.MOVE_RIGHT:
+                    # Right: 从左到右 -> 浅蓝到深蓝
+                    # T0(浅) -> T1 -> T2 -> T3(深)
+                    # 也就是把渐变列表倒过来取
+                    c = self.GRADIENT_BLUE[3 - t_idx]
+                
+                pixels_to_light.append((phys_idx, c))
+
+        # --- 情况 B: 普通 Touch (单轨道显示) ---
+        elif move_id in [settings.MOVE_TOUCH_1, settings.MOVE_TOUCH_2, settings.MOVE_TOUCH_3, settings.MOVE_TOUCH_4]:
+            
+            target_track = -1
+            if move_id == settings.MOVE_TOUCH_1: target_track = 0
+            if move_id == settings.MOVE_TOUCH_2: target_track = 1
+            if move_id == settings.MOVE_TOUCH_3: target_track = 2
+            if move_id == settings.MOVE_TOUCH_4: target_track = 3
+            
+            phys_idx = get_physical_index(target_track, local_pos)
+            if phys_idx >= 0:
+                # 统一使用好看的绿色
+                pixels_to_light.append((phys_idx, self.COLOR_NICE_GREEN))
+
+        # 3. 执行绘制
+        for p_idx, color_val in pixels_to_light:
+            if 0 <= p_idx < settings.NUM_PIXELS:
+                # 注意：这里直接赋值。如果多个音符重叠，后绘制的会覆盖先绘制的。
+                # 如果希望颜色混合，可以做复杂的 add logic，但通常直接覆盖在节奏游戏中更清晰。
+                self.hw.pixels[p_idx] = color_val

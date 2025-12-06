@@ -24,7 +24,6 @@ SONG_LIBRARY = [
     # --- Level 1: Twinkle Twinkle Little Star ---
     {
         "title": "Twinkle Star",
-        "bpm_scale": 1.0, # 速度系数
         "steps": [
             # 歌词: Twin-kle Twin-kle Lit-tle Star (1 1 5 5 6 6 5)
             # 设计逻辑: 

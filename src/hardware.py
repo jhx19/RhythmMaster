@@ -17,7 +17,7 @@ import settings
 class HardwareManager:
     def __init__(self):
         print("Initializing Hardware...")
-        
+        displayio.release_displays()
         # --- 1. I2C Setup (OLED & ADXL) ---
         # 使用 settings.py 中的 D6/D7 
         self.i2c = busio.I2C(settings.PIN_I2C_SCL, settings.PIN_I2C_SDA)
@@ -55,6 +55,7 @@ class HardwareManager:
         self.encoder_btn = digitalio.DigitalInOut(settings.PIN_ENCODER_BTN)
         self.encoder_btn.direction = digitalio.Direction.INPUT
         self.encoder_btn.pull = digitalio.Pull.UP
+        self.last_btn_state = True  # 初始状态：未按下 (高电平/True)
 
         # --- 5. Inputs: Capacitive Touch ---
         # Touch Pins: D0, D1, D2, D3 
@@ -100,25 +101,12 @@ class HardwareManager:
         """
         游戏主循环中调用的输入检测函数。
         【关键修改】：Touch Pad 改为边缘检测（从 False 到 True 的瞬间）
-        优先级：Double Tap > Touch > Tilt
+        优先级： Touch > Tilt > Double Tap
         返回检测到的 Move ID (例如 settings.MOVE_TAP)，如果没有动作则返回 settings.MOVE_NONE
         """
         
-        # 1. 检测 Double Tap (逻辑来自 input_test.py)
-        # ADXL事件是瞬时触发，不需要状态保持
-        if self.accel.events["tap"]:
-            current_time_ms = time.monotonic() * 1000.0
-            time_diff = current_time_ms - self.last_tap_time
-            
-            # 判定双击的时间间隔 (100ms - 500ms) 
-            if 100 < time_diff < 500.0:
-                print("ACTION: Double Tap!")
-                self.last_tap_time = 0.0 # 重置
-                return settings.MOVE_TAP
-            else:
-                self.last_tap_time = current_time_ms
 
-        # 2. 检测 Touch Pads (边缘检测)
+        # 1. 检测 Touch Pads (边缘检测)
         detected_touch = settings.MOVE_NONE
         for move_id, touch_obj in self.touch_map.items():
             current_state = touch_obj.value
@@ -136,33 +124,64 @@ class HardwareManager:
             return detected_touch
 
 
-        # 3. 检测 Tilt Left/Right (逻辑来自 input_test.py)
+        # 2. 检测 Tilt Left/Right (逻辑来自 input_test.py)
         # 带有冷却时间 (1.5秒) 
         current_time_s = time.monotonic()
         if current_time_s >= self.cooldown_until:
             x, y, z = self.accel.acceleration
             x_cal = x - self.av_x # 使用校准后的值
             
-            # 检测向右 (+X)
+            # 检测向左tilt (+X)
             if x_cal > settings.ADXL_THRESHOLD:
                 print(f"ACTION: Right Tilt (X={x_cal:.2f})")
                 self.cooldown_until = current_time_s + 1.5
-                return settings.MOVE_RIGHT
+                return settings.MOVE_LEFT
             
-            # 检测向左 (-X)
+            # 检测向右tilt (-X)
             elif x_cal < -settings.ADXL_THRESHOLD:
                 print(f"ACTION: Left Tilt (X={x_cal:.2f})")
                 self.cooldown_until = current_time_s + 1.5
-                return settings.MOVE_LEFT
+                return settings.MOVE_RIGHT
+            
+        # 3. 检测 Double Tap (逻辑来自 input_test.py)
+        # ADXL事件是瞬时触发，不需要状态保持
+        if self.accel.events["tap"]:
+            current_time_ms = time.monotonic() * 1000.0
+            time_diff = current_time_ms - self.last_tap_time
+            
+            # 判定双击的时间间隔 (100ms - 500ms) 
+            if 150 < time_diff < 300.0:
+                print("ACTION: Double Tap!")
+                self.last_tap_time = 0.0 # 重置
+                return settings.MOVE_TAP
+            else:
+                self.last_tap_time = current_time_ms
 
         return settings.MOVE_NONE
 
+    # def is_button_pressed(self):
+    #     """
+    #     检测 Encoder 按钮是否被按下 (低电平有效)
+    #     返回: True (按下) / False (未按下)
+    #     """
+    #     return not self.encoder_btn.value
     def is_button_pressed(self):
         """
-        检测 Encoder 按钮是否被按下 (低电平有效)
-        返回: True (按下) / False (未按下)
+        检测 Encoder 按钮是否发生了按下事件 (下降沿检测)。
+        同时处理软件去抖动。
+        返回: True (按下瞬间) / False (未按下或持续按下)
         """
-        return not self.encoder_btn.value
+        current_state = self.encoder_btn.value  # True = 未按下 (高电平), False = 已按下 (低电平)
+        
+        # 核心边缘检测逻辑：
+        # 1. 当前状态是 False (已按下)
+        # 2. 且 上一帧状态是 True (未按下)
+        is_pressed_now = (not current_state) and self.last_btn_state
+        
+        # 更新状态，以便下一帧判断
+        self.last_btn_state = current_state
+        
+        return is_pressed_now
 
     def get_encoder_delta(self):
         """

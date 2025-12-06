@@ -1,37 +1,38 @@
-# settings.py
+# settings.py (在原有基础上增加)
 import board
 
-# --- Pin Definitions ---
+# ... (保留你原有的 Pin Definitions 和 Game Constants) ...
 PIN_TOUCH_1 = board.D0
 PIN_TOUCH_2 = board.D1
 PIN_TOUCH_3 = board.D2
 PIN_TOUCH_4 = board.D3
 PIN_NEOPIXEL = board.D4
-PIN_BUZZER = board.D5
+PIN_I2C_SCL = board.D5  # 注意：这里和你的硬件描述一致
 PIN_I2C_SDA = board.D6
-PIN_I2C_SCL = board.D7
+PIN_BUZZER = board.D7
 PIN_ENCODER_A = board.D8
 PIN_ENCODER_B = board.D9
-PIN_ENCODER_BUTTON = board.D10
-# --- Game Constants ---
+PIN_ENCODER_BTN = board.D10
+
 DIFFICULTY_EASY = 0
 DIFFICULTY_MED = 1
 DIFFICULTY_HARD = 2
+DIFFICULTY_NAMES = ["EASY", "NORMAL", "HARD"] # 用于显示
 
-# Time limits (in seconds) based on difficulty
-TIME_LIMITS = {
-    DIFFICULTY_EASY: 5.0,
-    DIFFICULTY_MED: 3.0,
-    DIFFICULTY_HARD: 1.5
-}
+BPM = [2.0, 1.2, 0.7] 
+DURATION = [1.4, 1.0, 0.7] 
+SCORE_FACTOR = [1, 1.5, 2] 
 
-# --- Hardware Constants ---
+# --- New Constants ---
+MAX_GAME_LEVELS = 10  # 总共10关
+NUM_HIGHSCORES = 6
+
+# ... (保留 Hardware Constants 和 Move Definitions) ...
 NUM_PIXELS = 28  
 SCREEN_WIDTH = 128
 SCREEN_HEIGHT = 64
-ADXL_THRESHOLD = 8 # Accelerometer movement threshold
+ADXL_THRESHOLD = 6 
 
-# --- Move Definitions ---
 MOVE_NONE = 0 
 MOVE_TOUCH_1 = 1
 MOVE_TOUCH_2 = 2
@@ -42,3 +43,13 @@ MOVE_LEFT = 6
 MOVE_TAP = 7
 
 MOVES_LIST = ["TOUCH1","TOUCH2","TOUCH3","TOUCH4","LEFT","RIGHT","DOUBLETAP"]
+
+COLOR_NICE_GREEN = (30, 255, 30)
+COLOR_NICE_RED   = (231, 76, 60)
+COLOR_BLACK      = (0, 0, 0)
+GRADIENT_BLUE = [
+    (0, 0, 80),     
+    (0, 72, 162),    
+    (80, 160, 220),  
+    (180, 240, 255)  
+]
