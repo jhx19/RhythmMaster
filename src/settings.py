@@ -19,8 +19,8 @@ DIFFICULTY_MED = 1
 DIFFICULTY_HARD = 2
 DIFFICULTY_NAMES = ["EASY", "NORMAL", "HARD"] # 用于显示
 
-BPM = [2.0, 1.2, 0.7] 
-DURATION = [1.4, 1.0, 0.7] 
+BPM = [2, 1.2, 0.7] 
+DURATION = [0.2, 0.15, 0.1] 
 SCORE_FACTOR = [1, 1.5, 2] 
 
 # --- New Constants ---
@@ -48,8 +48,12 @@ COLOR_NICE_GREEN = (30, 255, 30)
 COLOR_NICE_RED   = (231, 76, 60)
 COLOR_BLACK      = (0, 0, 0)
 GRADIENT_BLUE = [
-    (0, 0, 80),     
-    (0, 72, 162),    
+    (0, 0, 50),     
+    (0, 60, 140),    
     (80, 160, 220),  
-    (180, 240, 255)  
+    (180, 255, 255)  
 ]
+
+QN = 0.4
+HN = 0.8
+

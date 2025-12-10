@@ -1,276 +1,397 @@
 import time
 import board
+import microcontroller
+import struct
 import settings
+import songs
 from hardware import HardwareManager
 from game_engine import RhythmGame
-import songs
-from highscore import HighScoreManager
 
-# --- 全局状态机常量 ---
+# --- 全局状态常量 ---
 STATE_SPLASH = 0
 STATE_MENU_DIFFICULTY = 1
-STATE_GAME_INIT = 2
-STATE_GAME_PLAYING = 3
-STATE_ROUND_RESULT = 4  # 单关结束（成功）
-STATE_GAME_OVER = 5     # 关卡失败
-STATE_HIGHSCORE_INPUT = 6
-STATE_HIGHSCORE_VIEW = 7
-STATE_ALL_CLEAR = 8     # 通关所有10关
+STATE_MENU_LEVEL = 2
+STATE_PLAYING = 3
+STATE_GAME_OVER = 4
+STATE_HIGHSCORE_ENTRY = 5
+STATE_HIGHSCORE_VIEW = 6
 
+# --- 排行榜管理类 (基于 NVM) ---
+# --- 排行榜管理类 (基于 NVM) ---
+class HighScoreManager:
+    # NVM 布局: 
+    # Header (2 bytes): 修改 Header 值以强制重置旧数据 (例如改最后一位)
+    # Records (6条): 每条 7 bytes (3 bytes 名字 + 4 bytes 分数 int)
+    
+    # [修复1] 修改 Header 比如 b'\xBE\xF1'，这会强制触发 _reset_nvm，清除以前可能出错的数据
+    HEADER = b'\xBE\xF1'  
+    MAX_ENTRIES = 6
+    ENTRY_SIZE = 7 
+    OFFSET = 0 
+
+    def __init__(self):
+        self.nvm = microcontroller.nvm
+        # 检查是否初始化
+        if self.nvm[0:2] != self.HEADER:
+            self._reset_nvm()
+
+    def _reset_nvm(self):
+        print("Initializing High Scores...")
+        self.nvm[0:2] = self.HEADER
+        # 填充默认数据
+        empty_data = (b'GIX', 100)
+        for i in range(self.MAX_ENTRIES):
+            self._write_entry(i, *empty_data)
+
+    def _write_entry(self, index, name_bytes, score):
+        start = 2 + index * self.ENTRY_SIZE
+        # [修复2] 使用 '<3sI'。 '<' 强制使用标准大小(不填充)，确保它是严格的 7 bytes
+        data = struct.pack('<3sI', name_bytes, score)
+        self.nvm[start : start + self.ENTRY_SIZE] = data
+
+    def get_high_scores(self):
+        scores = []
+        for i in range(self.MAX_ENTRIES):
+            start = 2 + i * self.ENTRY_SIZE
+            data = self.nvm[start : start + self.ENTRY_SIZE]
+            try:
+                # [修复2] 同样使用 '<3sI' 进行解包
+                name, score = struct.unpack('<3sI', data)
+                # 处理名字中的空字节 (如果有)
+                decoded_name = name.decode('utf-8').rstrip('\x00')
+                scores.append((decoded_name, score))
+            except Exception as e:
+                print(f"Error reading score {i}: {e}")
+                scores.append(("ERR", 0))
+                
+        scores.sort(key=lambda x: x[1], reverse=True)
+        return scores
+
+    def add_score(self, name_str, score):
+        current_scores = self.get_high_scores()
+        current_scores.append((name_str, score))
+        current_scores.sort(key=lambda x: x[1], reverse=True)
+        current_scores = current_scores[:self.MAX_ENTRIES]
+        
+        # 写回 NVM
+        for i, (n, s) in enumerate(current_scores):
+            self._write_entry(i, n.encode('utf-8'), s)
+
+# --- 主程序 ---
 class GameApp:
     def __init__(self):
         self.hw = HardwareManager()
         self.hs_manager = HighScoreManager()
+        self.state = STATE_SPLASH
         
-        self.current_state = STATE_SPLASH
-        
-        # 游戏进程变量
+        # 游戏会话数据
         self.difficulty = settings.DIFFICULTY_EASY
-        self.current_level = 1
-        self.total_score = 0      # 累计总分
-        self.last_level_score = 0 # 当前关卡得分（用于重试时回滚）
+        self.current_level_index = 0 # 0-based index
+        self.session_score = 0       # 之前关卡累积的分数
         self.current_game_engine = None
-        
-        # 菜单相关
-        self.menu_index = 0
-        self.last_interaction = time.monotonic()
+        self.last_level_score = 0    # 当前关卡获得的分数
 
     def run(self):
         while True:
-            self._handle_state()
-            time.sleep(0.01) # 防止死循环占用过多资源
-
-    def _handle_state(self):
-        if self.current_state == STATE_SPLASH:
-            self._do_splash()
-        elif self.current_state == STATE_MENU_DIFFICULTY:
-            self._do_menu_difficulty()
-        elif self.current_state == STATE_GAME_INIT:
-            self._do_game_init()
-        elif self.current_state == STATE_GAME_PLAYING:
-            self._do_game_playing()
-        elif self.current_state == STATE_ROUND_RESULT:
-            self._do_round_result()
-        elif self.current_state == STATE_GAME_OVER:
-            self._do_game_over()
-        elif self.current_state == STATE_ALL_CLEAR:
-            self._do_all_clear()
-        elif self.current_state == STATE_HIGHSCORE_INPUT:
-            self._do_highscore_input()
-        elif self.current_state == STATE_HIGHSCORE_VIEW:
-            self._do_highscore_view()
+            if self.state == STATE_SPLASH:
+                self.do_splash()
+            elif self.state == STATE_MENU_DIFFICULTY:
+                self.do_menu_difficulty()
+            elif self.state == STATE_MENU_LEVEL:
+                self.do_menu_level()
+            elif self.state == STATE_PLAYING:
+                self.do_playing()
+            elif self.state == STATE_GAME_OVER:
+                self.do_game_over()
+            elif self.state == STATE_HIGHSCORE_ENTRY:
+                self.do_highscore_entry()
+            elif self.state == STATE_HIGHSCORE_VIEW:
+                self.do_highscore_view()
+            
+            # 全局小延时防止空转过快
+            time.sleep(0.01)
 
     # --- 1. 开场动画 ---
-    def _do_splash(self):
-        # 简单的动画效果
-        self.hw.display_text("GIX RHYTHM", scale=2, y_offset=25)
-        self.hw.play_tone(523, 0.1) # C5
-        time.sleep(0.1)
-        self.hw.play_tone(659, 0.1) # E5
-        time.sleep(0.1)
-        self.hw.play_tone(784, 0.2) # G5
+    def do_splash(self):
+        # 动画 1: 文字出现
+        self.hw.display_layers([
+            {'text': "GIX", 'scale': 3, 'y': 20},
+            {'text': "RHYTHM", 'scale': 2, 'y': 50}
+        ])
+        self.hw.play_tone(440, 0.1)
+        self.hw.play_tone(554, 0.1)
+        self.hw.play_tone(659, 0.2)
         
-        for i in range(settings.NUM_PIXELS):
-            self.hw.pixels[i] = (0, 50, 255)
-            self.hw.pixels.show()
-            time.sleep(0.02)
+        # 动画 2: 灯光流水
+        for i in range(10):
+            color = settings.GRADIENT_BLUE[i % 4]
+            self.hw.pixels.fill((0,0,0))
+            self.hw.set_pixel_segment(i, i+5, color)
+            time.sleep(0.05)
         
-        time.sleep(0.5)
         self.hw.set_leds((0,0,0))
-        self.current_state = STATE_MENU_DIFFICULTY
+        time.sleep(0.5)
+        self.state = STATE_MENU_DIFFICULTY
+
+    # --- 通用菜单函数 ---
+    def _run_menu(self, title, items, start_idx=0):
+        """
+        通用的旋转编码器菜单逻辑
+        返回选择的索引
+        """
+        selected = start_idx
+        num_items = len(items)
+        
+        # 首次渲染
+        self._render_menu(title, items, selected)
+        
+        while True:
+            delta = self.hw.get_encoder_delta()
+            if delta != 0:
+                selected = (selected + delta) % num_items
+                self._render_menu(title, items, selected)
+                self.hw.play_tone(880, 0.05) # 导航音效
+
+            if self.hw.is_button_pressed():
+                self.hw.play_tone(1760, 0.1) # 确认音效
+                return selected
+            
+            time.sleep(0.05)
+
+    def _render_menu(self, title, items, selected):
+        num_items = len(items)
+        if num_items == 0:
+            return
+
+        # --- 1. 计算循环索引 (关键逻辑) ---
+        # 使用取模运算 % 实现首尾相接
+        # (selected - 1) % num_items 自动处理了 0-1 变成 -1 的情况(Python中 -1%4=3)
+        idx_prev = (selected - 1) % num_items 
+        idx_curr = selected
+        idx_next = (selected + 1) % num_items
+        
+        # --- 2. 准备显示的文本 ---
+        # 如果菜单项很少(比如只有1个)，防止显示重复看着别扭，可以加个判断(可选)
+        # 但标准的滚轮菜单即使重复显示也是正常的
+        text_prev = items[idx_prev]
+        text_curr = f"> {items[idx_curr]} <" # [优化] 使用符号强调，代替过大的字号
+        text_next = items[idx_next]
+        
+        # --- 3. 布局设置 (Fixed Layout) ---
+        # 屏幕高度 64。
+        # Title: y=5 (顶部)
+        # Prev:  y=20 (上方选项)
+        # Curr:  y=35 (中间高亮选项 - 视觉中心)
+        # Next:  y=50 (下方选项)
+        
+        layers = [
+            {'text': title, 'scale': 1, 'y': 5},
+            
+            # 上一项 (暗淡/普通)
+            {'text': text_prev, 'scale': 1, 'y': 20},
+            
+            # 当前项 (居中，虽然是 Scale 1 但加了箭头修饰)
+            {'text': text_curr, 'scale': 1, 'y': 35},
+            
+            # 下一项 (暗淡/普通)
+            {'text': text_next, 'scale': 1, 'y': 50}
+        ]
+        
+        self.hw.display_layers(layers)
 
     # --- 2. 难度选择 ---
-    def _do_menu_difficulty(self):
-        options = settings.DIFFICULTY_NAMES
-        self.menu_index = self._handle_menu_input(len(options), self.menu_index)
+    def do_menu_difficulty(self):
+        # 清除累积状态
+        self.session_score = 0
         
-        # 绘制菜单
-        layers = [
-            {'text': "SELECT DIFFICULTY", 'scale': 1, 'y': 10},
-            {'text': f"< {options[self.menu_index]} >", 'scale': 2, 'y': 35}
-        ]
-        self.hw.display_layers(layers)
+        options = ["EASY", "NORMAL", "HARD", "High Scores"]
+        idx = self._run_menu("SELECT DIFFICULTY", options)
         
-        if self.hw.is_button_pressed():
-            self.difficulty = self.menu_index
-            self.hw.play_tone(880, 0.1)
-            # 重置游戏全局变量
-            self.current_level = 1
-            self.total_score = 0
-            self.current_state = STATE_GAME_INIT
+        if idx == 3:
+            self.state = STATE_HIGHSCORE_VIEW
+        else:
+            self.difficulty = idx # 0, 1, 2 对应 settings.DIFFICULTY_*
+            self.state = STATE_MENU_LEVEL
 
-    # --- 3. 初始化关卡 ---
-    def _do_game_init(self):
-        level_data = songs.get_level_data(self.current_level)
-        self.hw.display_text(f"Level {self.current_level}", scale=2)
-        time.sleep(1.0)
-        self.hw.display_text(level_data['title'], scale=1)
-        time.sleep(1.0)
+    # --- 3. 关卡选择 ---
+    def do_menu_level(self):
+        # 获取所有可用关卡
+        total_songs = len(songs.SONG_LIBRARY)
+        options = [f"Level {i+1}" for i in range(total_songs)]
+        options.append("Back")
         
-        # 初始化游戏引擎
+        idx = self._run_menu("SELECT LEVEL", options)
+        
+        if idx == len(options) - 1:
+            self.state = STATE_MENU_DIFFICULTY
+        else:
+            self.current_level_index = idx
+            self.state = STATE_PLAYING
+
+    # --- 4. 游戏过程 ---
+    def do_playing(self):
+        # 1. 准备数据
+        level_data = songs.get_level_data(self.current_level_index + 1)
+        if not level_data:
+            print("Error: No level data")
+            self.state = STATE_MENU_DIFFICULTY
+            return
+
+        # 2. 初始化引擎
         self.current_game_engine = RhythmGame(self.hw, level_data, self.difficulty)
+        
+        # 3. 倒计时
+        for i in range(3, 0, -1):
+            self.hw.display_layers([
+                {'text': f"Level {self.current_level_index + 1}", 'scale': 1, 'y': 10},
+                {'text': str(i), 'scale': 4, 'y': 40}
+            ])
+            self.hw.play_tone(440, 0.1)
+            time.sleep(0.8)
+        
+        # 4. 开始游戏循环
         self.current_game_engine.start()
         
-        self.current_state = STATE_GAME_PLAYING
-
-    # --- 4. 游戏进行中 ---
-    def _do_game_playing(self):
-        if self.current_game_engine:
+        while True:
+            # 退出检测 (长按按钮?) - 这里简化为必须玩完
+            # 调用引擎更新
             self.current_game_engine.update()
             
-            # 检查是否结束
-            if self.current_game_engine.is_won:
-                # 记录本关分数
-                self.last_level_score = self.current_game_engine.score
-                self.total_score += self.last_level_score
+            # 状态检查
+            if self.current_game_engine.is_game_over:
+                # 失败
+                self.hw.play_tone(100, 0.5)
+                self.state = STATE_GAME_OVER
+                break
                 
-                # 检查是否通关所有10关
-                if self.current_level >= settings.MAX_GAME_LEVELS:
-                    self.current_state = STATE_ALL_CLEAR
-                else:
-                    self.current_state = STATE_ROUND_RESULT
-                    
-            elif self.current_game_engine.is_game_over:
-                # 失败（目前逻辑MISS不导致GameOver，但如果未来修改了可以在这里接）
-                self.current_state = STATE_GAME_OVER
+            if self.current_game_engine.is_won:
+                # 胜利
+                self.hw.play_tone(1000, 0.2)
+                time.sleep(0.1)
+                self.hw.play_tone(1200, 0.4)
+                self.state = STATE_GAME_OVER
+                break
+                
+            # 注意：此处不加 time.sleep，因为 game_engine 依赖高频刷新
 
-    # --- 5. 单关结算菜单 ---
-    def _do_round_result(self):
-        # 选项: Next Level, Replay Level, Quit
-        options = ["NEXT LEVEL", "REPLAY", "QUIT"]
-        self.menu_index = self._handle_menu_input(len(options), self.menu_index)
+    # --- 5. 游戏结算 ---
+    def do_game_over(self):
+        engine = self.current_game_engine
+        is_win = engine.is_won
+        self.last_level_score = int(engine.score)
+        total_now = self.session_score + self.last_level_score
         
-        layers = [
-            {'text': "LEVEL CLEARED!", 'scale': 1, 'y': 5},
-            {'text': f"Score: {self.current_game_engine.score}", 'scale': 1, 'y': 18},
-            {'text': f"Total: {self.total_score}", 'scale': 1, 'y': 28},
-            {'text': f"> {options[self.menu_index]}", 'scale': 1, 'y': 50}
-        ]
-        self.hw.display_layers(layers)
+        # 显示结果屏幕
+        title = "CLEARED!" if is_win else "GAME OVER"
+        self.hw.display_layers([
+            {'text': title, 'scale': 2, 'y': 10},
+            {'text': f"Score: {self.last_level_score}", 'scale': 1, 'y': 30},
+            {'text': f"Total: {total_now}", 'scale': 1, 'y': 45},
+            {'text': f"Max Combo: {engine.combo}", 'scale': 1, 'y': 60}
+        ])
         
-        if self.hw.is_button_pressed():
-            if self.menu_index == 0: # Next
-                self.current_level += 1
-                self.menu_index = 0
-                self.current_state = STATE_GAME_INIT
-            elif self.menu_index == 1: # Replay
-                # 回滚分数
-                self.total_score -= self.last_level_score
-                self.current_state = STATE_GAME_INIT
-            elif self.menu_index == 2: # Quit
-                self.current_state = STATE_HIGHSCORE_INPUT
-
-    # --- 6. 游戏失败 (Game Over) ---
-    def _do_game_over(self):
-        # 选项: Retry, Quit
-        options = ["RETRY LEVEL", "QUIT GAME"]
-        self.menu_index = self._handle_menu_input(len(options), self.menu_index)
-        
-        layers = [
-            {'text': "GAME OVER", 'scale': 2, 'y': 15},
-            {'text': f"> {options[self.menu_index]}", 'scale': 1, 'y': 45}
-        ]
-        self.hw.display_layers(layers)
-        
-        if self.hw.is_button_pressed():
-            if self.menu_index == 0: # Retry
-                # 这里假设失败时不加分，所以不用回滚
-                self.current_state = STATE_GAME_INIT
-            else: # Quit
-                self.current_state = STATE_HIGHSCORE_INPUT
-
-    # --- 7. 全通关 (Level 10 Finished) ---
-    def _do_all_clear(self):
-        # 强制保存
-        layers = [
-            {'text': "YOU WIN!", 'scale': 2, 'y': 15},
-            {'text': f"Final: {self.total_score}", 'scale': 1, 'y': 35},
-            {'text': "Press Button", 'scale': 1, 'y': 55}
-        ]
-        self.hw.display_layers(layers)
-        if self.hw.is_button_pressed():
-            self.current_state = STATE_HIGHSCORE_INPUT
-
-    # --- 8. 输入名字并保存 ---
-    def _do_highscore_input(self):
-        # 名字输入界面: [A] A A -> A [B] A -> ...
-        # self.menu_index 这里用来指示当前正在编辑第几个字母(0-2)
-        # 我们需要额外的状态来存储但这只是一个简单的状态机
-        
-        if not hasattr(self, 'name_chars'):
-            self.name_chars = [65, 65, 65] # ASCII 'A'
-            self.char_idx = 0
+        # 等待按键进入菜单
+        time.sleep(1.0) # 防止误触
+        while not self.hw.is_button_pressed():
+            time.sleep(0.1)
             
-        # 读取旋转编码器改变当前字符
-        delta = self.hw.get_encoder_delta()
-        if delta != 0:
-            self.name_chars[self.char_idx] += delta
-            # 限制在 A-Z (65-90)
-            if self.name_chars[self.char_idx] > 90: self.name_chars[self.char_idx] = 65
-            if self.name_chars[self.char_idx] < 65: self.name_chars[self.char_idx] = 90
-
-        # 构建显示字符串
-        name_str = "".join([chr(c) for c in self.name_chars])
+        # 结果菜单
+        menu_options = ["Retry Level", "Save & Quit"]
         
-        # 指示器
-        pointer_str = "  "
-        if self.char_idx == 0: pointer_str = "^    "
-        elif self.char_idx == 1: pointer_str = "  ^  "
-        elif self.char_idx == 2: pointer_str = "    ^"
+        # 只有赢了且不是最后一关才有 Next Level
+        can_next = is_win and (self.current_level_index < settings.MAX_GAME_LEVELS - 1)
+        # 如果还有下一关
+        if can_next:
+            menu_options.insert(1, "Next Level")
+        
+        idx = self._run_menu("RESULT MENU", menu_options)
+        
+        choice = menu_options[idx]
+        
+        if choice == "Retry Level":
+            # 重玩：不增加 session score，状态回退到 PLAYING
+            self.state = STATE_PLAYING
+            
+        elif choice == "Next Level":
+            # 下一关：确认累积当前分数
+            self.session_score += self.last_level_score
+            self.current_level_index += 1
+            self.state = STATE_PLAYING
+            
+        elif choice == "Save & Quit":
+            # 退出：累积最终分数并保存
+            self.session_score += self.last_level_score
+            self.state = STATE_HIGHSCORE_ENTRY
 
-        layers = [
-            {'text': "ENTER INITIALS", 'scale': 1, 'y': 10},
-            {'text': f"Score: {self.total_score}", 'scale': 1, 'y': 20},
-            {'text': name_str, 'scale': 2, 'y': 40},
-            {'text': pointer_str, 'scale': 1, 'y': 55}
-        ]
-        self.hw.display_layers(layers)
+    # --- 6. 输入名字并保存 ---
+# --- 6. 输入名字并保存 ---
+    def do_highscore_entry(self):
+        final_score = self.session_score
+        initials = [65, 65, 65] # ASCII 'A', 'A', 'A'
+        cursor = 0
+        
+        # [修复] 增加刷新标记，首次进入设为 True
+        need_refresh = True
+        
+        while cursor < 3:
+            # 只有当数据改变时才更新屏幕
+            if need_refresh:
+                char_str = "".join([chr(c) for c in initials])
+                # 高亮当前字符
+                indicator = " " * cursor + "^" + " " * (2-cursor)
+                
+                self.hw.display_layers([
+                    {'text': "NEW RECORD!", 'scale': 1, 'y': 10},
+                    {'text': f"Score: {final_score}", 'scale': 1, 'y': 25},
+                    {'text': char_str, 'scale': 3, 'y': 45},
+                    {'text': indicator, 'scale': 2, 'y': 60} 
+                ])
+                need_refresh = False # 重置标记
 
-        if self.hw.is_button_pressed():
-            self.char_idx += 1
-            if self.char_idx > 2:
-                # 输入完成，保存
-                final_name = "".join([chr(c) for c in self.name_chars])
-                self.hs_manager.add_score(final_name, self.total_score)
-                # 清理状态供下次使用
-                del self.name_chars 
-                self.char_idx = 0
-                self.menu_index = 0
-                self.current_state = STATE_HIGHSCORE_VIEW
+            # 输入逻辑
+            delta = self.hw.get_encoder_delta()
+            if delta != 0:
+                initials[cursor] += delta
+                if initials[cursor] > 90: initials[cursor] = 65
+                if initials[cursor] < 65: initials[cursor] = 90
+                need_refresh = True # [修复] 数据变了，需要刷新
+            
+            if self.hw.is_button_pressed():
+                self.hw.play_tone(1760, 0.1)
+                cursor += 1
+                need_refresh = True # [修复] 光标变了，需要刷新
+                time.sleep(0.2) # 防抖
+            
+            time.sleep(0.05)
+            
+        # 保存
+        name = "".join([chr(c) for c in initials])
+        self.hs_manager.add_score(name, final_score)
+        
+        self.hw.display_layers([
+            {'text': "SAVED!", 'scale': 3, 'y': 32}
+        ])
+        time.sleep(1.5)
+        self.state = STATE_HIGHSCORE_VIEW
 
-    # --- 9. 查看排行榜 ---
-    def _do_highscore_view(self):
+    # --- 7. 查看排行榜 ---
+    def do_highscore_view(self):
         scores = self.hs_manager.get_high_scores()
         
-        layers = [{'text': "LEADERBOARD", 'scale': 1, 'y': 5}]
+        # 将分数转换为菜单项只用于显示
+        items = []
+        for i, (name, s) in enumerate(scores):
+            items.append(f"{i+1}. {name}  {s}")
+            
+        items.append("[ Back ]")
         
-        start_y = 18
-        for i, entry in enumerate(scores):
-            # 只显示前4名因为屏幕太小，或者分屏
-            if i >= 4: break 
-            row_text = f"{i+1}. {entry['name']}  {entry['score']}"
-            layers.append({'text': row_text, 'scale': 1, 'y': start_y + (i * 10), 'x': 10})
+        self._run_menu("HIGH SCORES", items)
         
-        layers.append({'text': "Press to Reset", 'scale': 1, 'y': 58})
-        
-        self.hw.display_layers(layers)
-        
-        if self.hw.is_button_pressed():
-            self.menu_index = 0
-            self.current_state = STATE_MENU_DIFFICULTY
+        # 返回主菜单
+        self.state = STATE_MENU_DIFFICULTY
 
-    # --- 辅助函数 ---
-    def _handle_menu_input(self, num_items, current_idx):
-        delta = self.hw.get_encoder_delta()
-        if delta != 0:
-            new_idx = current_idx + delta
-            # 循环菜单
-            if new_idx < 0: new_idx = num_items - 1
-            if new_idx >= num_items: new_idx = 0
-            return new_idx
-        return current_idx
-
-# --- Main Entry ---
+# --- 启动 ---
 if __name__ == "__main__":
-    app = GameApp()
-    app.run()
+    game = GameApp()
+    game.run()
+

@@ -7,16 +7,17 @@ import neopixel
 import pwmio
 import touchio
 import digitalio
+import rotaryio  # <--- [新增] 使用内置库
 import adafruit_adxl34x
 import adafruit_displayio_ssd1306
 from adafruit_display_text import label
-from rotary_encoder import RotaryEncoder
+# from rotary_encoder import RotaryEncoder # <--- [删除] 不再需要自定义库
 from i2cdisplaybus import I2CDisplayBus
 import settings
 
 class HardwareManager:
     def __init__(self):
-        print("Initializing Hardware...")
+        print("Initializing Hardware (rotaryio version)...")
         displayio.release_displays()
         # --- 1. I2C Setup (OLED & ADXL) ---
         # 使用 settings.py 中的 D6/D7 
@@ -48,7 +49,8 @@ class HardwareManager:
 
         # --- 4. Inputs: Rotary Encoder & Button ---
         # Encoder Pins: D8, D9
-        self.encoder = RotaryEncoder(settings.PIN_ENCODER_A, settings.PIN_ENCODER_B, debounce_ms=6, pulses_per_detent=3)
+        # 【关键修改】使用 rotaryio 初始化
+        self.encoder = rotaryio.IncrementalEncoder(settings.PIN_ENCODER_A, settings.PIN_ENCODER_B)
         self.last_encoder_pos = 0
         
         # Encoder Button: D10 (需设置为上拉输入)
@@ -67,12 +69,13 @@ class HardwareManager:
             settings.MOVE_TOUCH_3: touchio.TouchIn(settings.PIN_TOUCH_3),
             settings.MOVE_TOUCH_4: touchio.TouchIn(settings.PIN_TOUCH_4)
         }
-        # 【新增】存储上一帧的触摸状态，用于边缘检测 (Edge Detection)
+        # 存储上一帧的触摸状态，用于边缘检测 (Edge Detection)
         self.last_touch_state = {move_id: False for move_id in self.touch_map.keys()}
         
         # 设置阈值 (可选，根据硬件调整)
         for tp in self.touch_map.values():
-            tp.threshold = tp.raw_value + 300
+           new_threshold = tp.raw_value + 1500
+           tp.threshold = min(new_threshold, 65535)
 
         # --- 6. Outputs: NeoPixel & Buzzer ---
         # NeoPixel: D4 
@@ -100,12 +103,7 @@ class HardwareManager:
     def read_game_inputs(self):
         """
         游戏主循环中调用的输入检测函数。
-        【关键修改】：Touch Pad 改为边缘检测（从 False 到 True 的瞬间）
-        优先级： Touch > Tilt > Double Tap
-        返回检测到的 Move ID (例如 settings.MOVE_TAP)，如果没有动作则返回 settings.MOVE_NONE
         """
-        
-
         # 1. 检测 Touch Pads (边缘检测)
         detected_touch = settings.MOVE_NONE
         for move_id, touch_obj in self.touch_map.items():
@@ -114,7 +112,6 @@ class HardwareManager:
             # 边缘检测：上一次是 False (未触摸)，现在是 True (已触摸)
             if current_state and not self.last_touch_state[move_id]:
                 detected_touch = move_id
-                # 理论上应该返回所有按下的键，但为了匹配之前的单返回结构，只返回第一个检测到的边缘
                 break 
                 
             # 更新状态，以便下一帧判断
@@ -123,9 +120,7 @@ class HardwareManager:
         if detected_touch != settings.MOVE_NONE:
             return detected_touch
 
-
-        # 2. 检测 Tilt Left/Right (逻辑来自 input_test.py)
-        # 带有冷却时间 (1.5秒) 
+        # 2. 检测 Tilt Left/Right
         current_time_s = time.monotonic()
         if current_time_s >= self.cooldown_until:
             x, y, z = self.accel.acceleration
@@ -143,8 +138,7 @@ class HardwareManager:
                 self.cooldown_until = current_time_s + 1.5
                 return settings.MOVE_RIGHT
             
-        # 3. 检测 Double Tap (逻辑来自 input_test.py)
-        # ADXL事件是瞬时触发，不需要状态保持
+        # 3. 检测 Double Tap
         if self.accel.events["tap"]:
             current_time_ms = time.monotonic() * 1000.0
             time_diff = current_time_ms - self.last_tap_time
@@ -159,12 +153,6 @@ class HardwareManager:
 
         return settings.MOVE_NONE
 
-    # def is_button_pressed(self):
-    #     """
-    #     检测 Encoder 按钮是否被按下 (低电平有效)
-    #     返回: True (按下) / False (未按下)
-    #     """
-    #     return not self.encoder_btn.value
     def is_button_pressed(self):
         """
         检测 Encoder 按钮是否发生了按下事件 (下降沿检测)。
@@ -173,57 +161,53 @@ class HardwareManager:
         """
         current_state = self.encoder_btn.value  # True = 未按下 (高电平), False = 已按下 (低电平)
         
-        # 核心边缘检测逻辑：
-        # 1. 当前状态是 False (已按下)
-        # 2. 且 上一帧状态是 True (未按下)
+        # 核心边缘检测逻辑
         is_pressed_now = (not current_state) and self.last_btn_state
-        
-        # 更新状态，以便下一帧判断
         self.last_btn_state = current_state
-        
         return is_pressed_now
 
     def get_encoder_delta(self):
         """
-        获取旋转编码器的变化量，并重置位置记录
-        用于菜单导航
+        【关键修改】获取旋转编码器的变化量
+        增加了 STEP 步进判断，适配 rotaryio 的高灵敏度
         """
+        # 读取当前累计脉冲数
         current_pos = self.encoder.position
         delta = current_pos - self.last_encoder_pos
-        self.last_encoder_pos = current_pos
-        return delta
+        
+        # 灵敏度调节：通常 rotaryio 转一个刻度会产生 2 或 4 个脉冲。
+        # 这里设置为 2，如果不灵敏（需要转2格才动一下）请改成 1
+        # 如果太灵敏（转1格跳好几下）请改成 4
+        STEP = 1
+        
+        if abs(delta) >= STEP:
+            # 计算实际走的步数 (整数除法)
+            steps = delta // STEP
+            
+            # 更新记录的位置 (只加整步数，避免误差累积)
+            self.last_encoder_pos += steps * STEP
+            return steps
+            
+        return 0
 
-    # 【修改后的显示函数】
     def display_layers(self, layers):
         """
-        多层/多行文本显示函数。支持不同文字大小和位置。
-        
-        参数:
-            layers: 列表，每个元素是一个字典，包含:
-                {'text': str, 'scale': int, 'x': int (可选), 'y': int (可选)}
+        多层/多行文本显示函数。
         """
-        # 1. 清空所有旧内容 
-        self.main_group.hidden = True # 提高性能，隐藏后再清空
+        self.main_group.hidden = True 
         while self.main_group:
             self.main_group.pop()
         
-        # 2. 绘制每一层
         for layer in layers:
             text = layer['text']
             scale = layer.get('scale', 1)
             
-            # 默认居中计算
-            font_height = 8 * scale 
-            
-            # 居中 x 坐标 (如果未指定)
-            text_width = len(text) * 6 * scale # 假设字体宽度约 6*scale
+            text_width = len(text) * 6 * scale 
             default_x = (settings.SCREEN_WIDTH - text_width) // 2
             
-            # 最终坐标
             x = layer.get('x', default_x)
             y = layer.get('y', settings.SCREEN_HEIGHT // 2)
             
-            # 创建 Label 对象
             text_label = label.Label(
                 terminalio.FONT, 
                 text=text, 
@@ -234,14 +218,9 @@ class HardwareManager:
             )
             self.main_group.append(text_label)
 
-        # 3. 重新显示
         self.main_group.hidden = False
 
-    # 【旧函数保留兼容性】
     def display_text(self, text, scale=1, x_offset=5, y_offset=None):
-        """
-        旧的单层显示函数，用于快速居中显示。
-        """
         if y_offset is None:
             y_offset = settings.SCREEN_HEIGHT // 2
             
@@ -249,14 +228,9 @@ class HardwareManager:
             {'text': text, 'scale': scale, 'x': x_offset, 'y': y_offset}
         ])
 
-
     def play_tone(self, freq, duration):
-        """
-        播放蜂鸣器音调 
-        注意：buzzer是低电平触发 (LOW=响, HIGH=静音)
-        """
-        PLAY_DUTY = 49152   # 约 75% 占空比 (实际上对应低电平触发的 25% 功率)
-        SILENCE_DUTY = 65535 # 100% 占空比 = HIGH = 静音
+        PLAY_DUTY = 49152   
+        SILENCE_DUTY = 65535 
 
         if freq > 0:
             self.buzzer.frequency = freq
@@ -265,15 +239,13 @@ class HardwareManager:
             self.buzzer.duty_cycle = SILENCE_DUTY
             
         time.sleep(duration)
-        self.buzzer.duty_cycle = SILENCE_DUTY # 停止
+        self.buzzer.duty_cycle = SILENCE_DUTY 
 
     def set_leds(self, color):
-        """设置所有 NeoPixel 的颜色"""
         self.pixels.fill(color)
         self.pixels.show()
 
     def set_pixel_segment(self, start, end, color):
-        """设置 NeoPixel 的某一段 (用于蛇形灯效等)"""
         for i in range(start, end):
              if 0 <= i < settings.NUM_PIXELS:
                 self.pixels[i] = color
