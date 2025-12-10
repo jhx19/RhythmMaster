@@ -24,10 +24,8 @@ M_L  = settings.MOVE_LEFT
 M_R  = settings.MOVE_RIGHT
 M_TAP = settings.MOVE_TAP
 
-# --- 3. 乐曲库 ---
 SONG_LIBRARY = [
-    # --- Level 1: Twinkle Twinkle Little Star (完整版) ---
-    # 结构: A - B - B - A
+    # --- Level 1: Twinkle Twinkle Little Star  ---
     {
         "title": "Twinkle Star",
         "steps": [
@@ -37,7 +35,7 @@ SONG_LIBRARY = [
             ('F4', QN, M_T4), ('F4', QN, M_T4), ('E4', QN, M_T3), ('E4', QN, M_T3),
             ('D4', QN, M_T2), ('D4', QN, M_T2), ('C4', HN, M_L),
             
-            # Section B: Bridge (重复两次)
+            # Section B: Bridge 
             ('G4', QN, M_T2), ('G4', QN, M_T2), ('F4', QN, M_T4), ('F4', QN, M_T4),
             ('E4', QN, M_T3), ('E4', QN, M_T3), ('D4', HN, M_TAP),
             ('G4', QN, M_T2), ('G4', QN, M_T2), ('F4', QN, M_T4), ('F4', QN, M_T4),
@@ -45,8 +43,7 @@ SONG_LIBRARY = [
         ]
     },
 
-    # --- Level 2: Happy Birthday (完整版) ---
-    # 包含高潮部分的跨度跳跃
+    # --- Level 2: Happy Birthday  ---
     {
         "title": "Happy B-Day",
         "steps": [
@@ -62,7 +59,6 @@ SONG_LIBRARY = [
     },
 
     # --- Level 3: Jingle Bells (Verse + Chorus) ---
-    # 增加了前面的主歌部分，然后接副歌
     {
         "title": "Jingle Bells",
         "steps": [            
@@ -79,7 +75,6 @@ SONG_LIBRARY = [
     },
 
     # --- Level 4: Mario Theme (Main Loop) ---
-    # 经典的切分节奏，增加了长度
     {
         "title": "Mario Bros",
         "steps": [            
@@ -96,7 +91,6 @@ SONG_LIBRARY = [
     },
 
     # --- Level 5: Ode to Joy (A-A-B-A Form) ---
-    # 完整的欢乐颂结构
     {
         "title": "Ode to Joy",
         "steps": [
@@ -115,7 +109,6 @@ SONG_LIBRARY = [
     },
 
     # --- Level 6: Imperial March (Extended) ---
-    # 增加第二段高音部分
     {
         "title": "Darth Vader",
         "steps": [
@@ -132,7 +125,6 @@ SONG_LIBRARY = [
     },
 
     # --- Level 7: Tetris Theme (A + B Section) ---
-    # 俄罗斯方块经典两段式
     {
         "title": "Tetris",
         "steps": [
@@ -145,7 +137,6 @@ SONG_LIBRARY = [
     },
 
     # --- Level 8: Zelda's Lullaby (Extended) ---
-    # 舒缓的长音
     {
         "title": "Zelda Song",
         "steps": [
@@ -160,7 +151,6 @@ SONG_LIBRARY = [
     },
 
     # --- Level 9: Mission Impossible (Loop x4) ---
-    # 5/4拍 循环洗脑
     {
         "title": "Impossible",
         "steps": [
@@ -179,7 +169,6 @@ SONG_LIBRARY = [
     },
 
     # --- Level 10: The Final Boss (Endurance Run) ---
-    # 极长且复杂的音阶练习
     {
         "title": "BOSS FIGHT",
         "steps": [

@@ -6,76 +6,56 @@ class RhythmGame:
         self.hw = hardware
         self.song_data = song_data
         
-        # --- 游戏参数 ---
         self.score = 0
         self.combo = 0 
         self.max_combo = 0
         self.is_game_over = False
         self.is_won = False
         
-        # 视觉参数
         self.tick_duration = settings.DURATION[difficulty]
         self.look_ahead_time = 7 * self.tick_duration 
         self.bpm_scale = settings.BPM[difficulty]
         self.score_factor = settings.SCORE_FACTOR[difficulty]   
         
-        # --- 判定窗口逻辑 (Fixed Beat Window) ---
-        # 基础短音符时长 (Quarter Note) 默认为 0.4s (参考 songs.py)
-        # 实际时长根据难度系数缩放
         base_qn_duration = settings.QN * self.bpm_scale
         
-        # Good Window: 允许误差为短音符时长的一半 (+/-)
-        # 这样 Good 判定区总宽度等于一个短音符时长，覆盖了整个节拍
         self.good_window = base_qn_duration / 2.5
         
-        # Perfect Window: Good 窗口的一半
         self.perfect_window = self.good_window / 2.0
         
         print(f"Difficulty: {settings.DIFFICULTY_NAMES[difficulty]}")
         print(f"Beat Duration: {base_qn_duration:.3f}s")
         print(f"Windows -> Good: +/-{self.good_window:.3f}s, Perfect: +/-{self.perfect_window:.3f}s")
 
-        # --- 乐谱预处理 ---
         self.timeline = [] 
         self._preprocess_song_windows()
         
-        # --- 运行时状态 ---
-        self.start_delay = 2.0  # 开局下落缓冲
+        self.start_delay = 2.0  
         self.start_time = 0.0
         self.active_index = 0   
         self.audio_index = 0    
         
-        # 非阻塞音频控制
         self.current_buzzer_end_time = 0.0
 
-        # 颜色定义
         self.COLOR_NICE_GREEN = settings.COLOR_NICE_GREEN
         self.COLOR_NICE_RED   = settings.COLOR_NICE_RED
         self.GRADIENT_BLUE = settings.GRADIENT_BLUE
 
     def _preprocess_song_windows(self):
-        """
-        基于【固定节拍窗口】预处理。
-        不再依赖前后音符的中点，而是依赖固定的 BPM 窗口。
-        """
         raw_steps = self.song_data["steps"]
         total_steps = len(raw_steps)
         
         current_play_time = 0.0
         
-        # 生成时间轴
         for note_name, duration, move_input in raw_steps:
             real_duration = duration * self.bpm_scale
             freq = self._get_note_freq(note_name)
             
-            # 处理多按键
             if isinstance(move_input, list):
                 moves_set = set(move_input)
             else:
                 moves_set = {move_input} if move_input != settings.MOVE_NONE else set()
 
-            # 计算窗口结束时间 (用于判定 MISS)
-            # 超过 Target Time + Good Window 即视为 Miss
             target_t = current_play_time
             win_start_t = target_t - self.good_window
             win_end_t = target_t + self.good_window
@@ -117,22 +97,17 @@ class RhythmGame:
         now = time.monotonic()
         song_time = now - self.start_time
 
-        # 1. 胜利检查
         if song_time > self.total_duration + 1.0:
             self.is_won = True
             self._stop_tone()
             return
 
-        # 2. 音频更新
         self._update_audio(song_time, now)
 
-        # 3. Miss 判定与指针移动
-        # 只要当前时间超过了 active_index 的 [target + good_window]，说明错过了
         while self.active_index < len(self.timeline):
             current_node = self.timeline[self.active_index]
             
             if song_time > current_node["win_end"]:
-                # 窗口结束，若仍有未完成动作 -> MISS
                 if len(current_node["required_moves"]) > 0:
                     print(f"MISS at index {self.active_index}!")
                     current_node["hit_status"] = "MISS"
@@ -141,13 +116,10 @@ class RhythmGame:
                 
                 self.active_index += 1
             else:
-                # 还在窗口内（或者还没到窗口），停止移动指针
                 break
 
-        # 4. 视觉更新
         self._update_visuals(song_time)
 
-        # 5. 输入处理
         self._handle_input(song_time)
 
     def _update_audio(self, song_time, now_absolute):
@@ -180,20 +152,15 @@ class RhythmGame:
         if user_input == settings.MOVE_NONE:
             return
 
-        # 只有 active_index 是合法的判定对象
         if self.active_index < len(self.timeline):
             active_node = self.timeline[self.active_index]
             
-            # 计算时间差绝对值
             diff = abs(song_time - active_node["target_time"])
             
-            # 只有在 Good Window 内才响应 
             if diff <= self.good_window:
                 if user_input in active_node["required_moves"]:
-                    # --- 命中 ---
                     active_node["required_moves"].remove(user_input)
                     
-                    # 判定是否是 Perfect 
                     is_perfect = diff <= self.perfect_window
                     
                     base_points = 20 if is_perfect else 10
@@ -201,7 +168,6 @@ class RhythmGame:
                     
                     hit_type = "PERFECT" if is_perfect else "GOOD"
                     
-                    # 全部动作完成处理
                     if len(active_node["required_moves"]) == 0:
                         self.combo += 1
                         self.max_combo = max(self.max_combo, self.combo)
@@ -213,7 +179,6 @@ class RhythmGame:
                     self._draw_hud(hit_type)
                     self._flash_row(user_input)
                 else:
-                    # 只有按对键才算，按错键忽略（不打断Combo，也不加分）
                     pass
 
     def _draw_hud(self, feedback_text=""):

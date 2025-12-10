@@ -1,13 +1,11 @@
-# settings.py (在原有基础上增加)
 import board
 
-# ... (保留你原有的 Pin Definitions 和 Game Constants) ...
 PIN_TOUCH_1 = board.D0
 PIN_TOUCH_2 = board.D1
 PIN_TOUCH_3 = board.D2
 PIN_TOUCH_4 = board.D3
 PIN_NEOPIXEL = board.D4
-PIN_I2C_SCL = board.D5  # 注意：这里和你的硬件描述一致
+PIN_I2C_SCL = board.D5  
 PIN_I2C_SDA = board.D6
 PIN_BUZZER = board.D7
 PIN_ENCODER_A = board.D8
@@ -17,17 +15,16 @@ PIN_ENCODER_BTN = board.D10
 DIFFICULTY_EASY = 0
 DIFFICULTY_MED = 1
 DIFFICULTY_HARD = 2
-DIFFICULTY_NAMES = ["EASY", "NORMAL", "HARD"] # 用于显示
+DIFFICULTY_NAMES = ["EASY", "NORMAL", "HARD"] 
 
 BPM = [2, 1.2, 0.7] 
 DURATION = [0.2, 0.15, 0.1] 
 SCORE_FACTOR = [1, 1.5, 2] 
 
-# --- New Constants ---
-MAX_GAME_LEVELS = 10  # 总共10关
+
+MAX_GAME_LEVELS = 10  
 NUM_HIGHSCORES = 6
 
-# ... (保留 Hardware Constants 和 Move Definitions) ...
 NUM_PIXELS = 28  
 SCREEN_WIDTH = 128
 SCREEN_HEIGHT = 64
